@@ -6,6 +6,7 @@ import math
 import os
 import sys
 from typing import Iterable
+import json
 
 import torch
 
@@ -76,6 +77,9 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, out
     iou_types = tuple(k for k in ('segm', 'bbox') if k in postprocessors.keys())
     coco_evaluator = CocoEvaluator(base_ds, iou_types)
     # coco_evaluator.coco_eval[iou_types[0]].params.iouThrs = [0, 0.1, 0.5, 0.75]
+    if output_dir is not None:
+        coco_annotations = []
+        bbox_counter = 0
 
     panoptic_evaluator = None
     if 'panoptic' in postprocessors.keys():
@@ -113,6 +117,20 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, out
         if coco_evaluator is not None:
             coco_evaluator.update(res)
 
+        if output_dir is not None:
+            for image_id, output in res.items():
+                for bbox_id in range(len(output["scores"])):
+                    this_det = {
+                        "id": bbox_counter, 
+                        "image_id": image_id, 
+                        "score": output["scores"][bbox_id].item(), 
+                        "category_id": output["labels"][bbox_id].item()
+                        }
+                    bbox = output["boxes"][bbox_id]
+                    this_det["bbox"] = [int(bbox[0]), int(bbox[1]), int(bbox[2]) - int(bbox[0]), int(bbox[3]) - int(bbox[1])]
+                    bbox_counter += 1
+                    coco_annotations.append(this_det)
+        
         if panoptic_evaluator is not None:
             res_pano = postprocessors["panoptic"](outputs, target_sizes, orig_target_sizes)
             for i, target in enumerate(targets):
@@ -148,4 +166,12 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, out
         stats['PQ_all'] = panoptic_res["All"]
         stats['PQ_th'] = panoptic_res["Things"]
         stats['PQ_st'] = panoptic_res["Stuff"]
+    
+    if output_dir is not None:
+        coco_predict = {"annotations": coco_annotations, "images": data_loader.dataset.coco.dataset["images"]}
+        if "categories" in data_loader.dataset.coco.dataset:
+            coco_predict["categories"] = [data_loader.dataset.coco.dataset["categories"]]
+        with open(os.path.join(output_dir, "coco_predict.json"), "w") as file:
+            json.dump(coco_predict, file, indent=2)
+
     return stats, coco_evaluator
